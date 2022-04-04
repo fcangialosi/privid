@@ -1,0 +1,10 @@
+[package]
+name = "pql"
+version = "0.1.0"
+authors = ["Frank Cangialosi <frankc@csail.mit.edu>"]
+edition = "2018"
+
+[dependencies]
+chrono = "0.4"
+pest = "2.0"
+pest_derive = "2.0"

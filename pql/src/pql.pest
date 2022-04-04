@@ -1,0 +1,212 @@
+// Entry point: a PQL query is 1+ splits, 1+ processes, 1+ aggregations over those tables
+query = _{ 
+    SOI ~           // start token
+    creation_stmt_list ~
+    aggregation_stmt_list ~
+    EOI             // end token
+}
+
+creation_stmt_list = { ((split_stmt | process_stmt) ~ ";")+ }
+aggregation_stmt_list = { (aggregation_stmt ~ ";")+ }
+
+////////////
+// SPLITS //
+////////////
+
+
+// Single split statement
+split_stmt = { 
+    "SPLIT" ~ ident ~          // camera name
+    "BEGIN" ~ timestamp ~      // start timestamp
+    "END" ~ timestamp ~        // end timestamp
+    "BY" ~ "TIME" ~ duration ~ // split duration
+    // (stride)? ~                // (optional) stride duration
+    "INTO" ~ ident             // name of output chunks
+}
+
+// TODO stride
+// stride = { "STRIDE" ~ duration }
+
+/////////////
+// PROCESS //
+/////////////
+
+process_stmt = {
+    "PROCESS" ~ ident ~               // name of chunks from a split
+    "USING" ~ ident ~                 // path to model
+    "TIMEOUT" ~ duration ~            // 
+    "PRODUCING" ~ integer ~ "ROWS" ~  // max rows
+    "WITH SCHEMA" ~ column_def_list ~ // schema of output table
+    "INTO" ~ ident                    // name of output table
+}
+
+// columns defined in (comma,separated,list)
+column_def_list = { "(" ~ column_def ~ ("," ~ column_def)* ~ ")" }
+// 2 possible data types for columns: string or number
+column_def = {
+    (column_def_string | column_def_num)
+}
+// string columns must have string default value
+column_def_string = {
+    ident ~     // column name
+    ":" ~
+    ^"STRING" ~ // column type
+    "=" ~
+    ident       // default value
+}
+// number columns must have number default value (number can be int or float)
+column_def_num = {
+    ident ~     // column name
+    ":" ~
+    ^"NUMBER" ~ // column type
+    "=" ~
+    number      // default value
+}
+
+// unix timestamp in seconds for now
+timestamp = @{ integer }
+
+//////////////////
+// AGGREGATIONS //
+//////////////////
+
+
+// Single aggregation statement
+aggregation_stmt = { ^"SELECT" ~ expr_list ~ ^"FROM" ~ table ~ qualifier* } 
+// a table can itself be another full aggregation, a combination of tables, or a plain table
+table = { 
+    ("(" ~ (
+        aggregation_stmt |
+        table_intersect |
+        table_union | 
+        table_equijoin 
+    ) ~ 
+    ")") |
+    table_list
+}
+table_list = {
+    table_ident ~ 
+    ("," ~ table_ident)*
+}
+table_intersect = {
+    table ~ "INTERSECT" ~ table+ ~ "ON" ~ column_ident
+}
+table_union = {
+    table ~ "UNION" ~ table+ ~ "ON" ~ column_ident
+}
+table_equijoin = {
+    table ~ "EQUIJOIN" ~ table+ ~ "ON" ~ column_ident
+}
+
+
+// count(col)
+string_agg = {
+    ^"COUNT"
+}
+// sum(col,l=0,u=10)
+// user_avg(col,l=0,u=10)
+num_agg = {
+    ^"SUM" | ^"VAR" | ^"QUANTILE" | ^"MEAN" | ^"STDDEV" 
+}
+aggfunc = { 
+    (string_agg ~ "(" ~ column_ident ~ ")") |
+
+    (num_agg ~ "(" ~ column_ident ~ 
+        (
+            "," ~ 
+            "l=" ~ number ~ "," ~
+            "u=" ~ number
+        )? ~
+    ")")
+}
+userfunc = {
+    ^"USER_" ~ ident ~ "(" ~ column_ident ~ ("," ~ "l=" ~ number ~ "," ~ "u=" ~ number)? ~ ")" ~ "as" ~ ident
+}
+
+// Expressions
+expr_list = { expr ~ ("," ~ expr)* }
+expr = { 
+    alias_expr | 
+    userfunc | 
+    aggfunc | 
+    column_ident
+}
+alias_expr = {
+    "(" ~ expr ~ op ~ expr ~ ")" ~ "as" ~ ident
+}
+// alias_expr = { aggfunc ~ "as" ~ ident }
+
+// Filter
+qualifier = { whereclause | groupbyclause | groupbywithkeys | windowclause | limitclause } 
+whereclause = { "WHERE" ~ predicate } 
+// NOTE the way this is structured, predicates require explicit precedence setting with parens
+// Meaning x && y && z is not valid, only (x && y) && z etc.
+predicate = { 
+    (term ~ (compare|bool_op) ~ term) 
+}
+term = _{ 
+    ("(" ~ predicate ~ ")") |
+    (number | column_ident) 
+}
+compare = @{
+    ">=" |
+    ">"  |
+    "<=" |
+    "<"  |
+    "==" |
+    "!=" 
+}
+bool_op = @{
+    "&&" |
+    "||"
+}
+op = @{
+    "+" |
+    "-" |
+    "*" | 
+    "/" |
+    "%"
+}
+
+// GroupBy
+groupbyclause = { "GROUP BY" ~ groupbyattr ~ ("," ~ groupbyattr)* } 
+groupbyattr = { ( binattr | column_ident) }
+binattr = {^"BIN" ~ "(" ~ column_ident ~ "," ~ time_unit ~ ")"}
+groupbywithkeys = {"GROUP BY" ~ column_ident ~ "WITH KEYS" ~ "(" ~ key_list ~ ")"}
+key_list = { ident ~ ("," ~ ident)* }
+windowclause = { "WITH WINDOW" ~ duration }
+
+// Limit
+limitclause = { "LIMIT" ~ integer }
+
+
+/////////////////
+// BASIC TYPES // 
+/////////////////
+
+
+// PQL is whitespace insensitive
+WHITESPACE = _{ " " | "\n" | "\t" | "\r" }
+
+duration = !{ number ~ time_unit ~ "s"? } 
+time_unit = @{
+    "usec"  |
+    "ms"    |
+    "sec"   |
+    "min"   |
+    "hr"    | 
+    "day"   |
+    "week"  |
+    "month" |
+    "year"
+}
+
+// Identifier, can only contain letters or numbers, not space
+column_ident = @{ ident }
+table_ident = @{ ident } 
+ident = @{ !"ON" ~ (ASCII_ALPHANUMERIC | "_" | ".")+ }
+// Numbers can be floats or integers
+number = { float | integer }
+float = @{ (ASCII_DIGIT)+ ~ "." ~ (ASCII_DIGIT)+ }
+integer = @{ (ASCII_DIGIT)+ }
+
