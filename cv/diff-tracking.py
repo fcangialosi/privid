@@ -9,8 +9,6 @@ from tqdm import tqdm
 def get_frames(video_name):
     seen = 0
     nframes = int(sys.argv[2])
-    nskip = int(sys.argv[3])
-    skipped = nskip
     if not video_name:
         cap = cv2.VideoCapture(0)
         # warmup
@@ -25,12 +23,10 @@ def get_frames(video_name):
     elif video_name.endswith('avi') or \
         video_name.endswith('mp4'):
         cap = cv2.VideoCapture(sys.argv[1])
+        #fps = cap.get(cv2.CAP_PROP_FPS)
+        #cap.set(cv2.CAP_PROP_FPS, 15)
         while True:
             ret, frame = cap.read()
-            if skipped < nskip:
-                skipped += 1
-                continue
-            skipped = 0
             if ret and seen < nframes:
                 seen += 1
                 yield frame
@@ -45,10 +41,15 @@ def get_frames(video_name):
             yield frame
 
 
-out = cv2.VideoWriter('out.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 15.0, (2560, 1440))
+out = cv2.VideoWriter('out.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30.0, (1920, 1080)) # (2560, 1440))
 prev_im = None
+skip = 0
 for im in tqdm(get_frames(sys.argv[1])):
 
+    if skip == 1:
+        skip = 0
+        continue
+    skip+=1
     #small_im = cv2.resize(im, dsize=(0,0), fx=0.5, fy=0.5)
     #im = cv2.imread(im_name)
     if prev_im is None:
@@ -62,7 +63,7 @@ for im in tqdm(get_frames(sys.argv[1])):
     #opening = cv2.morphologyEx(delta, cv2.MORPH_OPEN, kernel)
 
     gray = cv2.cvtColor(delta.copy(), cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5,5), 0)
+    gray = cv2.GaussianBlur(gray, (25,25), 0)
     thresh = cv2.threshold(gray, 25, 255, cv2.THRESH_BINARY)[1]
     thresh = cv2.dilate(thresh, None, iterations=2)
 
